@@ -1,0 +1,171 @@
+import React, { useState, useRef, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Stave, StaveNote, Renderer, Formatter } from "vexflow";
+import * as Tone from "tone";
+
+const notesArrayMajor = ["C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5"];
+const notesArrayMinor = ["C4", "D4", "Eb4", "F4", "G4", "Ab4", "Bb4", "C5"];
+
+export default function MelodyGenerator() {
+  const [melody, setMelody] = useState([]);
+  const [showScore, setShowScore] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [playbackPosition, setPlaybackPosition] = useState(0);
+
+  const synth = useRef(
+    new Tone.Sampler({
+      urls: {
+        "C4": "C4.mp3",
+        "D4": "D4.mp3",
+        "E4": "E4.mp3",
+        "F4": "F4.mp3",
+        "G4": "G4.mp3",
+        "A4": "A4.mp3",
+        "B4": "B4.mp3",
+        "C5": "C5.mp3",
+        "C#4": "Cs4.mp3",
+        "D#4": "Ds4.mp3",
+        "F#4": "Fs4.mp3",
+        "G#4": "Gs4.mp3",
+        "A#4": "As4.mp3"
+      },
+      baseUrl: "https://raw.githubusercontent.com/nbrosowsky/tonejs-instruments/master/samples/piano/",
+      onload: () => {
+        if (!isLoaded) {
+          console.log("Tots els samples carregats correctament!");
+          setIsLoaded(true);
+        }
+      },
+    }).toDestination()
+  );
+
+  const containerRef = useRef(null);
+  const synthPart = useRef(null);
+
+  const generateRandomMelody = () => {
+    setShowScore(false);
+
+    const scale = Math.random() > 0.5 ? notesArrayMajor : notesArrayMinor;
+    const durations = ["4n", "8n", "16n"];
+
+    const newMelody = Array.from({ length: 16 }, (_, i) => {
+      const note = scale[Math.floor(Math.random() * scale.length)];
+      const duration = durations[Math.floor(Math.random() * durations.length)];
+      return { key: note, duration, time: 0 };
+    });
+
+    let currentTime = 0;
+    newMelody.forEach((note) => {
+      note.time = currentTime;
+      currentTime += Tone.Time(note.duration).toSeconds();
+    });
+
+    stopMelody();
+    setMelody(newMelody);
+  };
+
+  const playMelody = async () => {
+    if (!isLoaded || melody.length === 0) {
+      console.warn("Els samples encara no estan carregats o no hi ha melodia.");
+      return;
+    }
+    await Tone.start();
+
+    if (synthPart.current) {
+      synthPart.current.dispose();
+    }
+
+    synthPart.current = new Tone.Part((time, note) => {
+      synth.current.triggerAttackRelease(note.key, note.duration, time);
+    }, melody.map((n) => [n.time, n]));
+
+    synthPart.current.start(0);
+    Tone.Transport.start(undefined, playbackPosition);
+    setIsPlaying(true);
+  };
+
+  const pauseMelody = () => {
+    setPlaybackPosition(Tone.Transport.seconds);
+    Tone.Transport.pause();
+    setIsPlaying(false);
+  };
+
+  const stopMelody = () => {
+    if (synthPart.current) {
+      synthPart.current.stop();
+      synthPart.current.dispose();
+      synthPart.current = null;
+    }
+    setPlaybackPosition(0);
+    Tone.Transport.stop();
+    Tone.Transport.position = 0;
+    setIsPlaying(false);
+  };
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (isPlaying) {
+        const totalDuration = melody.reduce((acc, n) => acc + Tone.Time(n.duration).toSeconds(), 0);
+        if (totalDuration > 0) {
+          setProgress(Tone.Transport.seconds / totalDuration);
+        }
+      }
+    }, 100);
+    return () => clearInterval(interval);
+  }, [isPlaying, melody]);
+
+  const handleSeek = (event) => {
+    const totalDuration = melody.reduce((acc, n) => acc + Tone.Time(n.duration).toSeconds(), 0);
+    const newTime = parseFloat(event.target.value) * totalDuration;
+    Tone.Transport.seconds = newTime;
+    setPlaybackPosition(newTime);
+    setProgress(event.target.value);
+  };
+
+  useEffect(() => {
+    if (showScore && containerRef.current) {
+      containerRef.current.innerHTML = "";
+      const renderer = new Renderer(containerRef.current, Renderer.Backends.SVG);
+      renderer.resize(500, 150);
+      const context = renderer.getContext();
+      const stave = new Stave(10, 40, 400);
+      stave.addClef("treble").setContext(context).draw();
+
+      const notes = melody.map((n) => new StaveNote({ 
+        keys: [n.key[0] + "/4"], 
+        duration: n.duration.includes("16") ? "16" : n.duration.includes("8") ? "8" : "q" 
+      }));
+
+      Formatter.FormatAndDraw(context, stave, notes);
+    }
+  }, [showScore, melody]);
+
+  return (
+    <div className="flex flex-col items-center gap-4 p-4">
+      <Button onClick={generateRandomMelody}>Generar Melodia Aleatòria</Button>
+      <div className="flex items-center gap-2">
+        <Button onClick={isPlaying ? pauseMelody : playMelody} disabled={!isLoaded || melody.length === 0}>
+          {isPlaying ? "Pausa" : playbackPosition > 0 ? "Reprendre" : "Reproduir"}
+        </Button>
+        <Button onClick={stopMelody} disabled={!isPlaying && playbackPosition === 0}>
+          Aturar
+        </Button>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={progress}
+          onChange={handleSeek}
+          className="w-64"
+        />
+      </div>
+      <Button onClick={() => setShowScore(true)} disabled={melody.length === 0}>
+        Mostrar Partitura
+      </Button>
+      {showScore && <div ref={containerRef} className="mt-4"></div>}
+    </div>
+  );
+}
